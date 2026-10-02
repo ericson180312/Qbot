@@ -242,7 +242,9 @@ class AdxMacd(TWStrategy):
 def _kdj(strategy, period=9):
     high_n = bt.indicators.Highest(strategy.data.high, period=period)
     low_n = bt.indicators.Lowest(strategy.data.low, period=period)
-    rsv = 100 * bt.DivByZero(strategy.data.close - low_n, high_n - low_n, zero=None)
+    # 原始碼用 zero=None：9 日最高等於最低時回傳 None，backtrader 的 runonce 模式會直接崩潰
+    # （T2 首跑在價格完全不動的個股上踩到）。改成 RSV = 50（中性），報告註記為程式錯誤修正
+    rsv = 100 * bt.DivByZero(strategy.data.close - low_n, high_n - low_n, zero=0.5)
     k = bt.indicators.EMA(rsv, period=3, plot=False)
     d = bt.indicators.EMA(k, period=3, plot=False)
     return k, d, 3 * k - 2 * d

@@ -90,11 +90,11 @@ def run_t1():
 def _t2_symbol(symbol: str, spans: pd.DataFrame, codes):
     bars = data.load_bars(symbol)
     if len(bars) < 60:
-        return symbol, {}, None
+        return symbol, {}, None, []
     member = data.membership(spans, symbol, bars.index)
     first = member.idxmax() if member.any() else None
     if first is None:
-        return symbol, {}, None
+        return symbol, {}, None, []
     # 指標暖身從入選前 300 個交易日開始；出場最晚看到資料結束
     lo = max(0, bars.index.get_loc(first) - 300)
     bars = bars.iloc[lo:]
@@ -104,9 +104,14 @@ def _t2_symbol(symbol: str, spans: pd.DataFrame, codes):
     trades_out = {}
     daily = {"bh": np.expm1(oo.where(member))}
     seed_base = int(symbol[2:]) if symbol[2:].isdigit() else 0
+    errors = []
     for i, code in enumerate(codes):
         strat = STRATEGY_BY_CODE[code]
-        res = engine.run(bars, strat, symbol, in_universe=member)
+        try:
+            res = engine.run(bars, strat, symbol, in_universe=member)
+        except Exception as exc:  # 記錄下來寫進報告，不讓單一股票讓整批作廢
+            errors.append((symbol, code, repr(exc)))
+            continue
         trades = engine.trades_from_held(res.held)
         rng = np.random.default_rng([config.NULL_SEED, i, seed_base])
         table = analysis.t2_trade_null(trades, bars, buy, sell, rng)
@@ -114,7 +119,7 @@ def _t2_symbol(symbol: str, spans: pd.DataFrame, codes):
         trades_out[code] = table
         lr = analysis.position_log_returns(res.held, oo, buy, sell)
         daily[code] = np.expm1(lr.where(member))
-    return symbol, trades_out, pd.DataFrame(daily)
+    return symbol, trades_out, pd.DataFrame(daily), errors
 
 
 def run_t2(limit=None, workers: int = 10):
@@ -125,11 +130,13 @@ def run_t2(limit=None, workers: int = 10):
     codes = [s.code for s in STRATEGIES]
     trades = {c: [] for c in codes}
     sums, counts = None, None
+    errors = []
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_t2_symbol, s, spans, codes) for s in symbols]
         for k, fut in enumerate(as_completed(futures), 1):
-            symbol, tables, daily = fut.result()
+            symbol, tables, daily, errs = fut.result()
+            errors.extend(errs)
             for c, tab in tables.items():
                 trades[c].append(tab)
             if daily is not None:
@@ -165,7 +172,8 @@ def run_t2(limit=None, workers: int = 10):
                          r.full_positive_year_share, r.concentration_ok, config.T2_MATERIALITY)
         for r in t2.itertuples()
     ]
-    return t2, trades, portfolio
+    t2.attrs["errors"] = errors
+    return t2, trades, portfolio, errors
 
 
 def main():
@@ -181,10 +189,11 @@ def main():
         with open(OUT.joinpath("t1.pkl"), "wb") as f:
             pickle.dump({"t1": t1, "curves": curves, "years": years, "bh": bh_summary, "window": window}, f)
     if not args.skip_t2:
-        t2, trades, portfolio = run_t2(args.t2_limit)
+        t2, trades, portfolio, errors = run_t2(args.t2_limit)
         t2.to_csv(OUT.joinpath("t2_results.csv"), encoding="utf-8-sig")
         with open(OUT.joinpath("t2.pkl"), "wb") as f:
-            pickle.dump({"t2": t2, "trades": trades, "portfolio": portfolio}, f)
+            pickle.dump({"t2": t2, "trades": trades, "portfolio": portfolio, "errors": errors}, f)
+        print(f"T2 errors: {len(errors)}", errors[:10], flush=True)
 
 
 if __name__ == "__main__":

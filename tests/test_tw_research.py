@@ -332,6 +332,14 @@ class TestStrategyRules(unittest.TestCase):
         # 原始碼的 or 條件會讓每筆都只持有 1 天；改成死叉後持有天數應有分布
         self.assertGreater((trades["exit_i"] - trades["entry_i"]).max(), 1)
 
+    def test_flat_prices_do_not_crash_kdj(self):
+        # 9 日最高 = 最低時 RSV 分母為 0；原始碼的 zero=None 會讓 backtrader 崩潰
+        bars = make_bars(300, seed=1)
+        bars.iloc[100:130, :4] = 50.0
+        for strat in (S.Kdj, S.KdjMacd):
+            res = engine.run(bars, strat, "TW1")
+            self.assertEqual(len(res.held), len(bars))
+
     def test_adx_holds_three_days(self):
         bars = make_bars(1500, seed=5, drift=0.0008)
         res = engine.run(bars, S.AdxMacd, "TW1")
