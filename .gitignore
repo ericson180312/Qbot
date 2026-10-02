@@ -146,3 +146,6 @@ pytrader/user_config.sh
 *.parquet
 
 **.DS_Store
+
+# tw_research 的中間結果（可由 run_*.py 重建）
+outputs/tw_research/**/*.pkl
