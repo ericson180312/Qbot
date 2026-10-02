@@ -458,6 +458,8 @@ python main.py  #if run on Mac, please use 'pythonw main.py'
 
 ### Benchmark and Model zoo
 
+台股版本（資料下載 + qlib 回測設定）見 [台股qlib工作流](docs/03-智能策略/台股qlib工作流.md)。
+
 Results and models are available in the [model zoo](docs/03-智能策略/model_zoo.md). AI strategies is shown at [here](./pytrader/strategies/), local run ``python pytrader/strategies/workflow_by_code.py``, also provide [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/UFund-Me/Qbot/HEAD?labpath=pytrader%2Fstrategies%2Fworkflow_by_code.ipynb)
 
 <details><summary><em><b>👉 点击展开查看具体AI模型benchmark结果</b></em></summary>
