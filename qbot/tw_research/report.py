@@ -107,7 +107,7 @@ def small_multiples(curves: pd.DataFrame, bench: pd.Series, titles, path, bench_
         ax.set_visible(False)
     axes[0].xaxis.set_major_locator(mdates.YearLocator(4))
     axes[0].xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    axes[0].yaxis.set_major_locator(FixedLocator([0.5, 1, 2, 5, 10, 20]))
+    axes[0].yaxis.set_major_locator(FixedLocator([0.1, 0.2, 0.5, 1, 2, 5, 10, 20]))
     axes[0].yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     axes[0].yaxis.set_minor_locator(FixedLocator([]))
     handles = [plt.Line2D([], [], color=SERIES[0], linewidth=1.6), plt.Line2D([], [], color=BENCH, linewidth=1.2)]
@@ -128,7 +128,8 @@ def line_chart(series: dict, path, ylabel, title=None):
     ax.set_ylabel(ylabel)
     if title:
         ax.set_title(title, loc="left", color=INK)
-    ax.legend(list(series), frameon=False, loc="upper left", fontsize=8)
+    ax.legend(list(series), frameon=False, loc="lower left", fontsize=8)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax.margins(x=0.12)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
@@ -240,9 +241,14 @@ def section_t2(d) -> str:
     desc_tab.index = ["股票池等權" if i == "bh" else f"{i} {STRATEGY_BY_CODE[i].__name__}" for i in desc_tab.index]
     desc_tab.index.name = "組合"
     counts = t2["verdict"].value_counts().to_dict()
+    errors = d.get("errors", [])
+    err_text = (f"執行失敗的（股票, 策略）組合：{len(errors)} 個"
+                + ("：" + "、".join(f"{s} {c}" for s, c, _ in errors[:20]) if errors else "。"))
     return f"""## A-T2：個股波段（每季流動性前 {config.T2_TOP_N} 名）
 
 **判定：{', '.join(f'{k} × {v}' for k, v in sorted(counts.items()))}。**
+
+{err_text} 持有期間碰到不可能跳動而剔除的交易數列在「剔除（跳動）」欄。
 
 ![T2 超額](figures/t2_excess.png)
 
@@ -284,6 +290,9 @@ def section_b1(d) -> str:
               float(np.nanmax(np.abs(cand["test_ic_w"]))) * 1.1)
     ax.plot([0, lim], [0, lim], color=AXIS, linewidth=1, linestyle=(0, (4, 3)))
     ax.axhline(config.B1_MATERIALITY, color=INK2, linewidth=1, linestyle=(0, (2, 2)))
+    ax.text(lim, config.B1_MATERIALITY, f"門檻 {config.B1_MATERIALITY}", color=INK2, fontsize=8,
+            ha="right", va="bottom")
+    ax.text(lim, lim, "兩期相同", color=MUTED, fontsize=8, ha="right", va="top")
     ax.axhline(0, color=AXIS, linewidth=1)
     ax.set_xlabel("探索期 2008–2020：方向化加權 IC")
     ax.set_ylabel("測試期 2021–2026/09：方向化加權 IC")
@@ -297,8 +306,12 @@ def section_b1(d) -> str:
         q = pd.DataFrame(d["quantiles"]).T * 1e4
         q.columns = [f"Q{int(c)}" for c in q.columns]
         q["Q5−Q1"] = q.iloc[:, -1] - q.iloc[:, 0]
+        q = q.round(2)
+        q["平均數與 IC 同向"] = np.where(q["Q5−Q1"] > 0, "是", "**否**")
         q_text = ("通過因子在測試期的五分位平均日報酬（相對當日平均，bp；alphalens `mean_return_by_quantile`，"
-                  "已依方向化，Q5 為預期最好的一組）：\n\n" + md_table(q.round(2)))
+                  "已依方向化，Q5 為 IC 預期最好的一組）。rank IC 量的是名次（接近中位數），等權持有賺的是平均數；"
+                  "兩者方向不同時，表示右尾（漲停）集中在 IC 預期較差的那組（cross-sectional-selection §1）：\n\n"
+                  + md_table(q))
     return f"""## B1：Alpha158 單因子篩選
 
 158 個因子中探索期 |t(z)| ≥ {config.B1_DISCOVERY_T} 的候選 {int(j['candidate'].sum())} 個；
@@ -329,7 +342,7 @@ def section_b2(d) -> str:
         "上界": t["upper95"].map(pct),
         "判定": t["verdict"],
     })
-    tab.index.name = "模型"
+    tab.index = tab.index.rename("模型")
     sens = pd.DataFrame({
         "主設定": t["main_ann_excess_vs_ew"].map(pct),
         "手續費 0": t["fee0_ann_excess_vs_ew"].map(pct),
@@ -338,7 +351,7 @@ def section_b2(d) -> str:
         "n_drop=2": t["ndrop2_ann_excess_vs_ew"].map(pct),
         "每日換手": t["daily_turnover"].map(lambda v: f"{v:.1%}"),
     })
-    sens.index.name = "模型（年化淨超額 vs 等權）"
+    sens.index = sens.index.rename("模型（年化淨超額 vs 等權）")
     diag = ""
     if "ic_diff_vs_linear" in t:
         dd = t.dropna(subset=["ic_diff_vs_linear"])
