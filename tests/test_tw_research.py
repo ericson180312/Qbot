@@ -505,3 +505,70 @@ class TestConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWFHedge(unittest.TestCase):
+    """C 部分（wf_hedge.py）：訓練期截止、避險比率排程、beta、避險後報酬、判定。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from tw_research import wf_hedge
+
+        cls.wf = wf_hedge
+
+    def test_train_end_embargo(self):
+        self.assertEqual(self.wf.train_end(2013), "2012-12-20")
+        cfg = self.wf.handler_config(2018)["kwargs"]
+        self.assertEqual(cfg["fit_end_time"], "2017-12-20")
+        self.assertEqual(cfg["end_time"], "2018-12-31")
+
+    def make_returns(self, n=400):
+        rng = np.random.default_rng(3)
+        idx = pd.bdate_range("2012-01-02", periods=n)
+        bench = pd.Series(rng.normal(0, 0.01, n), index=idx)
+        stocks = pd.DataFrame({"A": 3.0 * bench, "B": 0.5 * bench + rng.normal(0, 1e-9, n),
+                               "C": bench.where(idx >= idx[-50])}, index=idx)
+        return stocks, bench
+
+    def test_stock_betas_clip_and_min_obs(self):
+        stocks, bench = self.make_returns()
+        b = self.wf.stock_betas(stocks, bench, stocks.index[-1], ["A", "B", "C", "Z"])
+        self.assertAlmostEqual(b["A"], 2.0)  # 3.0 截斷到 2
+        self.assertAlmostEqual(b["B"], 0.5, places=5)
+        self.assertEqual(b["C"], 1.0)  # 只有 50 筆有效觀測 < 120
+        self.assertEqual(b["Z"], 1.0)  # 沒有資料
+
+    def test_hedge_ratio_schedule(self):
+        stocks, bench = self.make_returns()
+        dates = stocks.index[stocks.index >= "2013-03-01"][:45]  # 3 月、4 月、5 月初
+        w = pd.Series({"A": 0.4, "B": 0.6})
+        weights = {d: w for d in dates}
+        H = self.wf.hedge_ratios(dates, weights, stocks, bench, segment_starts=[dates[0]])
+        ups = self.wf.update_dates(dates)
+        self.assertEqual(list(ups.month), [3, 4, 5])
+        expected = 0.4 * 2.0 + 0.6 * 0.5
+        self.assertEqual(H.iloc[0], 0.0)  # 分段第一天還是現金
+        self.assertAlmostEqual(H.loc[dates[1]], expected, places=5)
+        self.assertAlmostEqual(H.loc[ups[1]], expected, places=5)  # 更新日當天仍用上個月的比率
+
+    def test_hedged_returns_hand_check(self):
+        idx = pd.bdate_range("2014-01-01", periods=3)
+        net = pd.Series([0.01, -0.02, 0.005], index=idx)
+        bench = pd.Series([0.02, -0.01, 0.0], index=idx)
+        H = pd.Series([0.0, 0.8, 0.8], index=idx)
+        h = self.wf.hedged_returns(net, bench, H, cost_annual=0.0252)
+        np.testing.assert_allclose(h.to_numpy(), [0.01, -0.02 + 0.008 - 0.8 * 0.0001, 0.005 - 0.8 * 0.0001])
+
+    def test_verdict_c_branches(self):
+        base = {"p": 0.01, "E": 0.05, "n_positive_years": 6, "half1": 0.03, "half2": 0.04,
+                "concentration_E": 0.02, "upper95": 0.12, "realized_beta": 0.05}
+        self.assertEqual(self.wf.verdict_c(base, 0.03), ("(+)", []))
+        self.assertEqual(self.wf.verdict_c(base, -0.01)[1], ["優勢可能來自大小型股的相對表現，而非選股"])
+        self.assertEqual(self.wf.verdict_c(dict(base, n_positive_years=4), 0.03)[0], "(?)")
+        self.assertEqual(self.wf.verdict_c(dict(base, half1=-0.01), 0.03)[0], "(?)")
+        self.assertEqual(self.wf.verdict_c(dict(base, p=0.2, E=-0.1, upper95=0.01), 0.03)[0], "(−)")
+        self.assertEqual(self.wf.verdict_c(dict(base, realized_beta=0.3), 0.03)[1], ["避險失效"])
+
+    def test_pre_registration_c_present(self):
+        self.assertIn("判準", config.PRE_REGISTRATION_C)
+        self.assertIn("walk-forward", config.PRE_REGISTRATION_C)
