@@ -572,3 +572,44 @@ class TestWFHedge(unittest.TestCase):
     def test_pre_registration_c_present(self):
         self.assertIn("判準", config.PRE_REGISTRATION_C)
         self.assertIn("walk-forward", config.PRE_REGISTRATION_C)
+
+
+class TestTaifex(unittest.TestCase):
+    def test_front_returns_rolls_before_expiry(self):
+        from tw_research import taifex
+
+        dates = pd.bdate_range("2016-01-18", periods=5)  # 1/18–1/22，近月 1/20 到期
+        rows = []
+        near = [100.0, 102.0, 999.0]  # 到期日（第 3 天）的收盤不是結算價，不能被用到
+        far = [99.0, 101.0, 98.0, 99.0, 100.0]
+        for i, d in enumerate(dates):
+            if i < 3:
+                rows.append({"date": d, "contract_date": "201601", "close": near[i], "volume": 10,
+                             "trading_session": "position"})
+            rows.append({"date": d, "contract_date": "201602", "close": far[i], "volume": 5,
+                         "trading_session": "position"})
+            rows.append({"date": d, "contract_date": "201601/201602", "close": -1.0, "volume": 1,
+                         "trading_session": "position"})
+            rows.append({"date": d, "contract_date": "201602", "close": 50.0, "volume": 1,
+                         "trading_session": "after_market"})
+        r = taifex.front_returns(taifex.clean(pd.DataFrame(rows)))
+        # 第 2 天用近月；第 3 天（到期日）已換次月；之後都是次月
+        np.testing.assert_allclose(r.to_numpy(), [102 / 100 - 1, 98 / 101 - 1, 99 / 98 - 1, 100 / 99 - 1])
+        self.assertEqual(list(r.index), list(dates[1:]))
+
+
+class TestWFLgb(unittest.TestCase):
+    def test_segments_do_not_overlap(self):
+        from tw_research import wf_lgb
+
+        seg = wf_lgb.segments(2013)
+        self.assertEqual(seg["train"], ("2008-01-01", "2011-12-20"))
+        self.assertEqual(seg["valid"], ("2012-01-01", "2012-12-20"))
+        self.assertEqual(seg["test"], ("2013-01-01", "2013-12-31"))
+        cfg = wf_lgb.handler_config(2013)["kwargs"]
+        self.assertEqual(cfg["fit_end_time"], "2011-12-20")
+        self.assertEqual(wf_lgb.SCENARIOS["股票成本（主設定）"], None)
+
+    def test_pre_registration_d_present(self):
+        self.assertIn("判準", config.PRE_REGISTRATION_D)
+        self.assertIn("台指期", config.PRE_REGISTRATION_D)

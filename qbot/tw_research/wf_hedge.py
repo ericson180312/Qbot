@@ -76,22 +76,25 @@ def fit_predict_year(year: int) -> Tuple[pd.Series, pd.Series]:
 
 # ---------------------------------------------------------------- 回測
 def qlib_backtest(pred: pd.Series, start: str, end: str, limit: float, n_drop: int,
-                  fee_multiplier: float = 1.0) -> Tuple[pd.DataFrame, Dict[pd.Timestamp, pd.Series]]:
+                  fee_multiplier: float = 1.0, costs: Tuple[float, float, float] = None,
+                  topk: int = config.WF_TOPK) -> Tuple[pd.DataFrame, Dict[pd.Timestamp, pd.Series]]:
+    """costs=(買進費率, 賣出費率, 最低費用) 時覆寫預設的股票成本（D 部分的個股期貨情境用）。"""
     from qlib.backtest import backtest
 
     fee = config.FEE_RATE * config.FEE_DISCOUNT * fee_multiplier
+    if costs is None:
+        costs = (fee, fee + config.SELL_TAX_STOCK, config.MIN_FEE * (fee_multiplier > 0))
     portfolio, _ = backtest(
         start_time=start,
         end_time=end,
         strategy={"class": "TopkDropoutStrategy", "module_path": "qlib.contrib.strategy",
-                  "kwargs": {"signal": pred.to_frame("score"), "topk": config.WF_TOPK, "n_drop": n_drop}},
+                  "kwargs": {"signal": pred.to_frame("score"), "topk": topk, "n_drop": n_drop}},
         executor={"class": "SimulatorExecutor", "module_path": "qlib.backtest.executor",
                   "kwargs": {"time_per_step": "day", "generate_portfolio_metrics": True}},
         benchmark=config.BENCHMARK,
         account=config.B2_ACCOUNT,
         exchange_kwargs={"freq": "day", "limit_threshold": limit, "deal_price": "close",
-                         "open_cost": fee, "close_cost": fee + config.SELL_TAX_STOCK,
-                         "min_cost": config.MIN_FEE * (fee_multiplier > 0)},
+                         "open_cost": costs[0], "close_cost": costs[1], "min_cost": costs[2]},
     )
     report, positions = portfolio["1day"]
     out = pd.DataFrame({"gross": report["return"], "cost": report["cost"], "turnover": report["turnover"]})
@@ -101,10 +104,10 @@ def qlib_backtest(pred: pd.Series, start: str, end: str, limit: float, n_drop: i
     return out, weights
 
 
-def segmented_backtest(pred: pd.Series, n_drop: int, fee_multiplier: float = 1.0):
+def segmented_backtest(pred: pd.Series, n_drop: int, fee_multiplier: float = 1.0, costs=None):
     reports, weights, starts = [], {}, []
     for start, end, limit in config.WF_SEGMENTS:
-        rep, w = qlib_backtest(pred, start, end, limit, n_drop, fee_multiplier)
+        rep, w = qlib_backtest(pred, start, end, limit, n_drop, fee_multiplier, costs)
         reports.append(rep)
         weights.update(w)
         starts.append(rep.index[0])
