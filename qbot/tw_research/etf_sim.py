@@ -41,6 +41,15 @@ MODEL_NAMES = {"M1": "M1 線性", "M2": "M2 LightGBM", "M3": "M3 XGBoost", "M4":
 
 
 # ---------------------------------------------------------------- walk-forward 預測
+GBDT_MODELS = {  # 模型 -> (特徵, qlib 模型設定)；參數同 B2
+    "M2": ("alpha158", {"class": "LGBModel", "module_path": "qlib.contrib.model.gbdt",
+                        "kwargs": dict(factors._LGB_158, seed=config.MODEL_SEED)}),
+    "M3": ("alpha158", factors.MODELS["M3_XGB_A158"][0]),
+    "M4": ("alpha360", {"class": "LGBModel", "module_path": "qlib.contrib.model.gbdt",
+                        "kwargs": dict(factors._LGB_360, seed=config.MODEL_SEED)}),
+}
+
+
 def _gbdt_segments(year: int) -> dict:
     end = min(pd.Timestamp(f"{year}-12-31"), pd.Timestamp(END)).strftime("%Y-%m-%d")
     return {
@@ -111,15 +120,8 @@ def predictions() -> Dict[str, pd.Series]:
         print(f"M1 {y} ok", flush=True)
     out["M1"] = pd.concat(preds)
 
-    gbdt = {
-        "M2": ("alpha158", {"class": "LGBModel", "module_path": "qlib.contrib.model.gbdt",
-                            "kwargs": dict(factors._LGB_158, seed=config.MODEL_SEED)}),
-        "M3": ("alpha158", factors.MODELS["M3_XGB_A158"][0]),
-        "M4": ("alpha360", {"class": "LGBModel", "module_path": "qlib.contrib.model.gbdt",
-                            "kwargs": dict(factors._LGB_360, seed=config.MODEL_SEED)}),
-    }
     handlers = {}
-    for key, (kind, cfg) in gbdt.items():
+    for key, (kind, cfg) in GBDT_MODELS.items():
         preds = []
         for y in YEARS:
             if key == "M2" and y <= 2020:

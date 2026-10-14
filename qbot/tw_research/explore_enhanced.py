@@ -26,7 +26,8 @@ import pickle
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict
+from types import SimpleNamespace
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -142,8 +143,8 @@ def active_stats(r: pd.Series, b: pd.Series) -> dict:
             "贏的年數": int((yr["r"] > yr["b"]).sum()), "年數": int(len(yr))}
 
 
-def run():
-    OUT.mkdir(parents=True, exist_ok=True)
+def load_context() -> SimpleNamespace:
+    """回測需要的資料：收盤價、可交易、日報酬、市值、0050、成交日、L1 模型分數（etf_sim 的預測快取）。"""
     from tw_research import data, factors
 
     factors.init_qlib()
@@ -153,60 +154,74 @@ def run():
     symbols = sorted(set().union(*[p.index.get_level_values("instrument").unique() for p in preds.values()]))
     close = D.features(symbols, ["$close"], start_time="2012-12-01", end_time=etf_sim.END)["$close"]
     close = close.unstack(level="instrument").sort_index().loc[:etf_sim.END]
-    ok = etf_sim.tradeable(close)
-    ret = etf_sim.daily_returns(close)
-    cap = load_caps(symbols, close.index)
-    bench0050 = data.load_t1_bars()["close"].pct_change().loc[etf_sim.START:etf_sim.END]
-    buy, sell = config.buy_cost_rate(), config.sell_cost_rate()
     trade_days = close.loc[etf_sim.START:etf_sim.END].index
-    scores = {k: p.unstack(level="instrument").reindex(trade_days) for k, p in preds.items()}
+    return SimpleNamespace(
+        close=close, ok=etf_sim.tradeable(close), ret=etf_sim.daily_returns(close),
+        cap=load_caps(symbols, close.index),
+        bench0050=data.load_t1_bars()["close"].pct_change().loc[etf_sim.START:etf_sim.END],
+        buy=config.buy_cost_rate(), sell=config.sell_cost_rate(), trade_days=trade_days,
+        scores={k: p.unstack(level="instrument").reindex(trade_days) for k, p in preds.items()}, plans={})
 
-    def plan(freq):
-        """[(分數日, 成交日, 前 50 檔市值)]"""
+
+def rebalance_plan(ctx: SimpleNamespace, freq: str):
+    """[(分數日, 成交日, 前 50 檔市值)]；股票池是分數日當天 M1（L1）有分數的 top200。"""
+    if freq not in ctx.plans:
         rows = []
-        for s in etf_sim.score_dates(trade_days, freq):
-            t = etf_sim.next_trade_day(ok, s)
+        for s in etf_sim.score_dates(ctx.trade_days, freq):
+            t = etf_sim.next_trade_day(ctx.ok, s)
             if t is None:
                 break
-            pool = scores["M1"].loc[s].dropna().index
-            rows.append((s, t, cap.loc[s].reindex(pool).dropna().nlargest(N_BENCH)))
-        return rows
+            pool = ctx.scores["M1"].loc[s].dropna().index
+            rows.append((s, t, ctx.cap.loc[s].reindex(pool).dropna().nlargest(N_BENCH)))
+        ctx.plans[freq] = rows
+    return ctx.plans[freq]
 
-    def run_set(freq, tilt, score_fn, tsmc_cap=TSMC_CAP):
-        targets = {}
-        for s, t, caps in plan_cache[freq]:
-            bw = bench_weights(caps, tsmc_cap)
-            targets[t] = bw if score_fn is None else tilt_weights(bw, score_fn(s, bw.index), tilt)
-        return targets
 
-    plan_cache = {f: plan(f) for f in {FREQ, *[v["freq"] for v in SENSITIVITY.values()]}}
+def build_targets(ctx: SimpleNamespace, freq: str, tilt: float, score_fn=None, tsmc_cap: float = TSMC_CAP):
+    """score_fn(分數日, 股票) -> 分數；None 是基準（不加減碼）。"""
+    targets = {}
+    for s, t, caps in rebalance_plan(ctx, freq):
+        bw = bench_weights(caps, tsmc_cap)
+        targets[t] = bw if score_fn is None else tilt_weights(bw, score_fn(s, bw.index), tilt)
+    return targets
+
+
+def table_scores(table: pd.DataFrame):
+    return lambda s, names: table.loc[s].reindex(names)
+
+
+def random_tilts(ctx: SimpleNamespace, freq: str = FREQ, tilt: float = TILT) -> List[pd.Series]:
+    rng = np.random.default_rng(RANDOM_SEED)
+    out = []
+    for _ in range(RANDOM_DRAWS):
+        targets = build_targets(ctx, freq, tilt, lambda s, names: pd.Series(rng.random(len(names)), index=names))
+        out.append(simulate_weights(targets, ctx.ret, ctx.ok, ctx.buy, ctx.sell)[0])
+    return out
+
+
+def run():
+    OUT.mkdir(parents=True, exist_ok=True)
+    ctx = load_context()
     series, turnover, weights = {}, {}, {}
 
     def go(name, targets):
-        series[name], turnover[name] = simulate_weights(targets, ret, ok, buy, sell)
+        series[name], turnover[name] = simulate_weights(targets, ctx.ret, ctx.ok, ctx.buy, ctx.sell)
         weights[name] = targets
 
-    go("B", run_set(FREQ, TILT, None))
+    go("B", build_targets(ctx, FREQ, TILT))
     for name, c in REFERENCE_CAPS.items():
-        go(name, run_set(FREQ, TILT, None, tsmc_cap=c))
+        go(name, build_targets(ctx, FREQ, TILT, tsmc_cap=c))
     for sname, sp in SENSITIVITY.items():
-        go(f"B|{sname}", run_set(sp["freq"], sp["tilt"], None))
-    for key in scores:
-        go(key, run_set(FREQ, TILT, lambda s, names, key=key: scores[key].loc[s].reindex(names)))
+        go(f"B|{sname}", build_targets(ctx, sp["freq"], sp["tilt"]))
+    for key, table in ctx.scores.items():
+        go(key, build_targets(ctx, FREQ, TILT, table_scores(table)))
         for sname, sp in SENSITIVITY.items():
-            go(f"{key}|{sname}", run_set(sp["freq"], sp["tilt"],
-                                         lambda s, names, key=key: scores[key].loc[s].reindex(names)))
+            go(f"{key}|{sname}", build_targets(ctx, sp["freq"], sp["tilt"], table_scores(table)))
         print(f"{key} done", flush=True)
-
-    rng = np.random.default_rng(RANDOM_SEED)
-    rand = []
-    for _ in range(RANDOM_DRAWS):
-        r, _ = simulate_weights(run_set(FREQ, TILT, lambda s, names: pd.Series(rng.random(len(names)), index=names)),
-                                ret, ok, buy, sell)
-        rand.append(r)
+    rand = random_tilts(ctx)
     print("random done", flush=True)
     with open(OUT.joinpath("enhanced.pkl"), "wb") as f:
-        pickle.dump({"series": series, "turnover": turnover, "random": rand, "bench0050": bench0050,
+        pickle.dump({"series": series, "turnover": turnover, "random": rand, "bench0050": ctx.bench0050,
                      "max_other_weight": {k: max(float(w.drop(TSMC, errors="ignore").max()) for w in v.values())
                                           for k, v in weights.items()}}, f)
     print("done", flush=True)

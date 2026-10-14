@@ -712,3 +712,40 @@ class TestEnhanced(unittest.TestCase):
         r, bought = self.x.simulate_weights(targets, ret, ok, buy=0.001, sell=0.003)
         np.testing.assert_allclose(r.to_numpy(), [-0.001, 0.05, 1.1 / 1.05 - 1, 0.05])
         np.testing.assert_allclose(bought.to_numpy(), [1.0, 0.0])
+
+
+class TestLabel60(unittest.TestCase):
+    def setUp(self):
+        from tw_research import wf_label60
+
+        self.x = wf_label60
+
+    def test_label_and_segments(self):
+        self.assertEqual(config.E_LABEL, (["Ref($close, -61) / Ref($close, -1) - 1"], ["LABEL0"]))
+        seg = self.x.gbdt_segments(2013)
+        self.assertEqual(seg["train"], ("2008-01-01", "2011-09-20"))
+        self.assertEqual(seg["valid"], ("2012-01-01", "2012-09-20"))
+        self.assertEqual(seg["test"], ("2013-01-01", "2013-12-31"))
+        self.assertEqual(self.x.gbdt_segments(2026)["test"][1], "2026-09-30")
+        h = self.x.linear_handler(2013)["kwargs"]
+        self.assertEqual(h["fit_end_time"], "2012-09-20")
+        self.assertEqual(h["label"], config.E_LABEL)
+
+    def test_effect_and_verdict(self):
+        idx = pd.bdate_range("2019-01-01", "2022-12-31")
+        rng = np.random.default_rng(0)
+        a = pd.Series(0.0002 + rng.normal(0, 0.001, len(idx)), index=idx)
+        st = self.x.effect(a)
+        self.assertAlmostEqual(st["E"], a.mean() * 252)
+        self.assertEqual(len(st["years"]), 4)
+        self.assertAlmostEqual(st["halves"][0], a.loc[:"2020-12-31"].mean() * 252)
+        good = {"E": 0.01, "upper95": 0.02, "halves": [0.01, 0.01], "n_positive_years": 9, "concentration_E": 0.005}
+        self.assertEqual(self.x.verdict(good, True), "(+)")
+        self.assertEqual(self.x.verdict(good, False), "(?)")
+        self.assertEqual(self.x.verdict({**good, "n_positive_years": 7}, True), "(?)")
+        self.assertEqual(self.x.verdict({**good, "E": -0.01, "upper95": 0.004}, False), "(−)")
+        self.assertEqual(self.x.verdict({**good, "E": 0.0, "upper95": 0.006}, False), "(?)")
+
+    def test_pre_registration_pasted(self):
+        self.assertIn("判準", config.PRE_REGISTRATION_E)
+        self.assertIn("60 日", config.PRE_REGISTRATION_E)
