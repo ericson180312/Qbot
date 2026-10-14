@@ -655,3 +655,60 @@ class TestETFSim(unittest.TestCase):
         picks = self.e.model_picks(scores, ok, [idx[1]], 1)
         self.assertEqual(list(picks), [idx[3]])
         self.assertEqual(picks[idx[3]], ["B"])
+
+
+class TestEnhanced(unittest.TestCase):
+    def setUp(self):
+        from tw_research import explore_enhanced
+
+        self.x = explore_enhanced
+
+    def test_bench_weights_cap_tsmc(self):
+        caps = pd.Series({"TW2330": 60.0, "A": 30.0, "B": 10.0})
+        w = self.x.bench_weights(caps, 0.25)
+        self.assertAlmostEqual(w["TW2330"], 0.25)
+        self.assertAlmostEqual(w["A"], 0.5625)  # 0.3 / 0.4 × 0.75
+        self.assertAlmostEqual(w["B"], 0.1875)
+        np.testing.assert_allclose(self.x.bench_weights(caps, 1.0).sort_index(), [0.3, 0.1, 0.6])
+        w0 = self.x.bench_weights(caps, 0.0)
+        self.assertAlmostEqual(w0["TW2330"], 0.0)
+        self.assertAlmostEqual(w0["A"], 0.75)
+
+    def test_tilt_weights(self):
+        bw = pd.Series({"TW2330": 0.25, "A": 0.40, "B": 0.30, "C": 0.05})
+        w = self.x.tilt_weights(bw, pd.Series({"A": 3.0, "B": 1.0, "C": 2.0}), tilt=0.06)
+        # u = 5/6、1/6、1/2 → 加減碼 +2%、−2%、0
+        np.testing.assert_allclose(w[["TW2330", "A", "B", "C"]], [0.25, 0.42, 0.28, 0.05])
+
+    def test_tilt_weights_clip_and_missing_score(self):
+        bw = pd.Series({"TW2330": 0.25, "A": 0.44, "B": 0.30, "C": 0.01})
+        w = self.x.tilt_weights(bw, pd.Series({"A": 3.0, "B": 2.0, "C": 1.0}), tilt=0.06)
+        # C 0.01 − 0.02 → 0；A 0.46、B 0.30 縮放到 0.75
+        np.testing.assert_allclose(w[["TW2330", "A", "B", "C"]], [0.25, 0.46 * 0.75 / 0.76, 0.30 * 0.75 / 0.76, 0.0])
+        w = self.x.tilt_weights(bw, pd.Series({"B": 1.0, "C": 2.0}), tilt=0.06)  # A 沒有分數 → 不加減碼
+        np.testing.assert_allclose(w[["A", "B", "C"]], [0.44, 0.285, 0.025])
+
+    def test_simulate_weights_matches_equal_weight(self):
+        from tw_research import etf_sim
+
+        idx = pd.bdate_range("2014-01-01", periods=5)
+        close = pd.DataFrame({"A": [10, 10, 11, 11, 12.1], "B": [20, 20, 20, 22, 22.0]}, index=idx)
+        ret = etf_sim.daily_returns(close)
+        ok = close.notna()
+        targets = {idx[1]: pd.Series({"A": 0.5, "B": 0.5}), idx[3]: pd.Series({"A": 1.0})}
+        r, bought = self.x.simulate_weights(targets, ret, ok, buy=0.001, sell=0.003)
+        np.testing.assert_allclose(r.to_numpy(), [-0.001, 0.05, (1.1 / 1.05) * (1 - 0.002) - 1, 0.1])
+        np.testing.assert_allclose(bought.to_numpy(), [1.0, 0.5])
+
+    def test_simulate_weights_locked_name_keeps_weight(self):
+        from tw_research import etf_sim
+
+        idx = pd.bdate_range("2014-01-01", periods=5)
+        close = pd.DataFrame({"A": [10, 10, 11, 11, 12.1], "B": [20, 20, 20, 22, 22.0]}, index=idx)
+        ret = etf_sim.daily_returns(close)
+        ok = close.notna()
+        ok.loc[idx[3], "B"] = False  # 換倉日 B 不能交易 → 維持 50%，A 只能拿剩下的 50%
+        targets = {idx[1]: pd.Series({"A": 0.5, "B": 0.5}), idx[3]: pd.Series({"A": 1.0})}
+        r, bought = self.x.simulate_weights(targets, ret, ok, buy=0.001, sell=0.003)
+        np.testing.assert_allclose(r.to_numpy(), [-0.001, 0.05, 1.1 / 1.05 - 1, 0.05])
+        np.testing.assert_allclose(bought.to_numpy(), [1.0, 0.0])
