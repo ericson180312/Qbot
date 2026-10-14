@@ -17,7 +17,7 @@ import pandas as pd
 
 from . import config
 
-TX_SOURCE_DIR = Path(r"C:\Users\User\Desktop\python_台指最佳槓桿\data")
+TX_SOURCE_DIR = Path(r"C:\Users\User\Desktop\Python_projects\python_台指最佳槓桿\data")
 CACHE_DIR = config.BASE_DIR.joinpath("taifex")
 
 
