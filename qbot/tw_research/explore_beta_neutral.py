@@ -131,6 +131,16 @@ def write_report():
                        for k, v in names.items()}).T
     ea.index.name = "模型"
     q = np.quantile(rand_e, [0.05, 0.5, 0.95])
+    ov = []
+    for k, v in names.items():  # 中性化本身（中性 − 未中性）：照 beta 該賺多少、實際賺多少
+        x = (series[f"中性|{k}"] - series[f"原始|{k}"]).dropna()
+        bb = b.reindex(x.index)
+        beta = float(np.cov(x, bb, ddof=1)[0, 1] / bb.var())
+        mu, _, t = analysis.newey_west_t(x.to_numpy(), config.NW_LAG_DAILY)
+        a_mu, _, a_t = analysis.newey_west_t((x - beta * bb).to_numpy(), config.NW_LAG_DAILY)
+        ov.append({"模型": v, "實際（年化）": f"{_pct(mu * 252)}（t {t:.2f}）", "對 B 的 beta": f"{beta:+.3f}",
+                   "照 beta 該賺": _pct(beta * bb.mean() * 252), "扣 beta 後": f"{_pct(a_mu * 252)}（t {a_t:.2f}）"})
+    ov = pd.DataFrame(ov).set_index("模型")
     text = f"""# beta 中性的增強型指數加減碼（事後探索）
 
 由 `qbot/tw_research/explore_beta_neutral.py` 產生。**描述性，不參與判定，不是證據**：這個想法是看過第五輪
@@ -149,6 +159,14 @@ def write_report():
 事前 beta 曝險（每季調整日，加減碼後對 0050 的 beta 減基準）：
 
 {rp.md_table(ea)}
+
+中性化本身賺了什麼（中性 − 未中性的日報酬差；B 的算術年化 {_pct(b.mean() * 252)}）：
+
+{rp.md_table(ov)}
+
+中性化等於在加減碼上再疊一個「依基準權重加碼高 beta、減碼低 beta」的部位。照 beta 推算它該多賺的部分沒有出現：
+這段期間大型股裡的高 beta 股票，報酬沒有比低 beta 股票多出 beta 所隱含的幅度。所以第五輪「扣 beta 後 +1.0%～+1.6%」
+是假設 beta 會被補償才算出來的，實際上拿不到。
 
 逐年 E（中性後）：
 
