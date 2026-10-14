@@ -177,12 +177,16 @@ def rebalance_plan(ctx: SimpleNamespace, freq: str):
     return ctx.plans[freq]
 
 
-def build_targets(ctx: SimpleNamespace, freq: str, tilt: float, score_fn=None, tsmc_cap: float = TSMC_CAP):
-    """score_fn(分數日, 股票) -> 分數；None 是基準（不加減碼）。"""
+def build_targets(ctx: SimpleNamespace, freq: str, tilt: float, score_fn=None, tsmc_cap: float = TSMC_CAP, post=None):
+    """score_fn(分數日, 股票) -> 分數；None 是基準（不加減碼）。post(分數日, 基準權重, 加減碼後權重) -> 權重，可選。"""
     targets = {}
     for s, t, caps in rebalance_plan(ctx, freq):
         bw = bench_weights(caps, tsmc_cap)
-        targets[t] = bw if score_fn is None else tilt_weights(bw, score_fn(s, bw.index), tilt)
+        if score_fn is None:
+            targets[t] = bw
+            continue
+        w = tilt_weights(bw, score_fn(s, bw.index), tilt)
+        targets[t] = w if post is None else post(s, bw, w)
     return targets
 
 
@@ -190,11 +194,12 @@ def table_scores(table: pd.DataFrame):
     return lambda s, names: table.loc[s].reindex(names)
 
 
-def random_tilts(ctx: SimpleNamespace, freq: str = FREQ, tilt: float = TILT) -> List[pd.Series]:
+def random_tilts(ctx: SimpleNamespace, freq: str = FREQ, tilt: float = TILT, post=None) -> List[pd.Series]:
     rng = np.random.default_rng(RANDOM_SEED)
     out = []
     for _ in range(RANDOM_DRAWS):
-        targets = build_targets(ctx, freq, tilt, lambda s, names: pd.Series(rng.random(len(names)), index=names))
+        targets = build_targets(ctx, freq, tilt, lambda s, names: pd.Series(rng.random(len(names)), index=names),
+                                post=post)
         out.append(simulate_weights(targets, ctx.ret, ctx.ok, ctx.buy, ctx.sell)[0])
     return out
 

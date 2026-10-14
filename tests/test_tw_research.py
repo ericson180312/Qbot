@@ -749,3 +749,19 @@ class TestLabel60(unittest.TestCase):
     def test_pre_registration_pasted(self):
         self.assertIn("判準", config.PRE_REGISTRATION_E)
         self.assertIn("60 日", config.PRE_REGISTRATION_E)
+
+
+class TestBetaNeutral(unittest.TestCase):
+    def test_neutralize_zeroes_active_beta(self):
+        from tw_research import explore_beta_neutral as x
+
+        bw = pd.Series({"TW2330": 0.25, "A": 0.40, "B": 0.30, "C": 0.05})
+        w = pd.Series({"TW2330": 0.25, "A": 0.42, "B": 0.28, "C": 0.05})
+        beta = pd.Series({"TW2330": 1.0, "A": 1.2, "B": 0.8, "C": 1.0})
+        self.assertAlmostEqual(x.active_beta(w, bw, beta), 0.008)
+        n = x.neutralize(w, bw, beta)
+        self.assertAlmostEqual(x.active_beta(n, bw, beta), 0.0)
+        self.assertAlmostEqual(n["TW2330"], 0.25)
+        self.assertAlmostEqual(n.drop("TW2330").sum(), 0.75)
+        # 依基準權重比例調整：k = −0.008 / Σ b·dev·β
+        self.assertAlmostEqual(n["A"], 0.42 - 0.29126 * 0.40 * (1.2 - 0.77 / 0.75), places=4)
