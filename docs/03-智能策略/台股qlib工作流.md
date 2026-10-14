@@ -4,6 +4,7 @@
 
 - 資料腳本：[qbot/data/tw_collector.py](../../qbot/data/tw_collector.py)
 - 回測設定：[workflow_config_lightgbm_Alpha158_tw.yaml](../../pytrader/strategies/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_tw.yaml)
+- 策略與因子的台股檢驗（預先承諾、隨機對照、多重比較）：[台股策略回測與因子挖掘](台股策略回測與因子挖掘.md)
 
 ### 安裝
 
