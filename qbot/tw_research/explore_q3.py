@@ -2,6 +2,7 @@
 
 回答「降低成本、改用台指期避險後，有沒有哪個設定每年都贏大盤」。
 避險比率用全期迴歸 beta（樣本內，偏樂觀）；個股期貨情境 = 毛報酬 − 換手 × 每邊成本（未計轉倉與標的限制）。
+台指期資料（taifex.TX_SOURCE_DIR）只到 2026-07-14，之後的日子沒有避險報酬、會被剔除。
 
 執行：python qbot/tw_research/explore_q3.py
 輸出：outputs/tw_research/explore_b2/q3_tx_hedged.csv
