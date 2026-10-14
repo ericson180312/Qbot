@@ -613,3 +613,45 @@ class TestWFLgb(unittest.TestCase):
     def test_pre_registration_d_present(self):
         self.assertIn("判準", config.PRE_REGISTRATION_D)
         self.assertIn("台指期", config.PRE_REGISTRATION_D)
+
+
+class TestETFSim(unittest.TestCase):
+    def setUp(self):
+        from tw_research import etf_sim
+
+        self.e = etf_sim
+
+    def test_score_dates(self):
+        days = pd.bdate_range("2013-01-02", "2013-12-31")
+        q = self.e.score_dates(days, "Q")
+        self.assertEqual([d.strftime("%m-%d") for d in q], ["01-02", "03-29", "06-28", "09-30", "12-31"])
+        h = self.e.score_dates(days, "H")
+        self.assertEqual([d.strftime("%m-%d") for d in h], ["01-02", "06-28", "12-31"])
+        self.assertEqual(len(self.e.score_dates(days, "M")), 13)
+
+    def test_simulate_hand_check(self):
+        idx = pd.bdate_range("2014-01-01", periods=5)
+        close = pd.DataFrame({"A": [10, 10, 11, 11, 12.1], "B": [20, 20, 20, 22, 22.0]}, index=idx)
+        ret = self.e.daily_returns(close)
+        picks = {idx[1]: ["A", "B"], idx[3]: ["A"]}
+        r = self.e.simulate(picks, ret, buy=0.001, sell=0.003)
+        # 第 1 天收盤買 A、B 各半（成本 0.1%）；第 2 天 A +10%；第 3 天 B +10%，收盤全換成 A；第 4 天 A +10%
+        # 第 3 天換倉：A 從 50% 買到 100%（0.5 × 0.1%），B 賣掉 50%（0.5 × 0.3%），成本 0.2%
+        expected = [-0.001, 0.05, (1.1 / 1.05) * (1 - 0.002) - 1, 0.1]
+        np.testing.assert_allclose(r.to_numpy(), expected)
+        self.assertEqual(list(r.index), list(idx[1:]))
+
+    def test_limit_up_not_tradeable(self):
+        idx = pd.DatetimeIndex(["2016-01-04", "2016-01-05"])
+        close = pd.DataFrame({"A": [10, 10.98], "B": [10, 10.5], "C": [10, np.nan]}, index=idx)
+        ok = self.e.tradeable(close)
+        self.assertEqual(ok.loc["2016-01-05"].tolist(), [False, True, False])
+
+    def test_trade_skips_market_closed_day(self):
+        idx = pd.bdate_range("2025-07-30", periods=4)  # 7/30、7/31、8/1（休市）、8/4
+        close = pd.DataFrame({"A": [10, 10, np.nan, 10.1], "B": [20, 20, np.nan, 20.2]}, index=idx)
+        ok = self.e.tradeable(close)
+        scores = pd.DataFrame({"A": [1.0] * 4, "B": [2.0] * 4}, index=idx)
+        picks = self.e.model_picks(scores, ok, [idx[1]], 1)
+        self.assertEqual(list(picks), [idx[3]])
+        self.assertEqual(picks[idx[3]], ["B"])
